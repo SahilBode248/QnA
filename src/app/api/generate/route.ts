@@ -8,33 +8,53 @@ import {
   MultilingualQnAData
 } from "@/lib/qnaEngine";
 
-function cleanPdfText(text: string): string {
-  if (!text) return "";
-  
-  // 1. Remove font table keywords, CID codes, and kerning offsets
-  let cleaned = text
-    .replace(/<[0-9A-Fa-f]{2,}>/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/-\d+\s*/g, " ")
-    .replace(/\b(Adobe|UCS|glyf|glyfr|fpgm|hmtx|head|loca|maxp|CFF|cmap|FontDescriptor|ToUnicode|en-IN|FontName|BaseFont|CIDInit|ProcSet|Encoding)\b/gi, " ")
-    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
-    .replace(/\s+/g, " ");
+// Common English words used to validate extracted text is real (not font binary data)
+const COMMON_WORDS = new Set([
+  "the","be","to","of","and","a","in","that","have","i","it","for","not","on","with",
+  "he","as","you","do","at","this","but","his","by","from","they","we","her","she","or",
+  "an","will","my","one","all","would","there","their","what","so","up","out","if","about",
+  "who","get","which","go","me","when","make","can","like","time","no","just","him","know",
+  "take","people","into","year","your","good","some","could","them","see","other","than",
+  "then","now","look","only","come","its","over","think","also","back","after","use","two",
+  "how","our","work","first","well","way","even","new","want","because","any","these","give",
+  "day","most","us","is","are","was","were","been","has","had","did","does","said","each",
+  "may","between","should","before","those","same","much","where","very","after","many",
+  "through","such","world","system","used","using","based","data","information","technology",
+  "intelligence","artificial","learning","machine","health","healthcare","medical","digital",
+  "modern","important","process","application","analysis","research","development","education",
+  "students","teachers","devices","services","including","questions","answers","document",
+  "life","human","computer","understanding","challenges","systems","support","provide",
+  "example","different","called","help","language","natural","processing","model","deep",
+  "every","more","still","here","must","need","part","great","high","small","large","end",
+  "long","both","while","found","head","made","right","still","since","during","without",
+  "however","under","another","being","once","down","upon","already","among","might","own",
+  "say","number","water","point","set","next","order","against","place","three","around",
+  "where","several","however","until","along","always","rather","often","never","person",
+  "india","indian","english","hindi","marathi","question","answer","text","file","word",
+  "smartphone","smartphones","bank","banking","shopping","transportation","entertainment",
+  "communication","recommendation","privacy","security","cybersecurity","bias","efficiency",
+  "automation","personalized","responsible","ethical","judgment","experience","professional",
+  "introduction","conclusion","benefits","format","input","output","sample","print","result"
+]);
 
-  // 2. Filter words to keep only valid human-readable words (with letters)
-  const words = cleaned.split(/\s+/).filter(w => {
-    const letterCount = (w.match(/[a-zA-Z]/g) || []).length;
-    const symbolCount = w.length - letterCount;
-    return letterCount >= 2 && symbolCount <= 2 && !w.startsWith("/");
-  });
-
-  const result = words.join(" ").trim();
+function isValidExtractedText(text: string): boolean {
+  if (!text || text.trim().length < 50) return false;
   
-  // Must contain at least 12 real words to be valid text
-  if (words.length < 12) {
-    return "";
+  // Strip non-ASCII and normalize
+  const ascii = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+  const words = ascii.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+  
+  if (words.length < 15) return false;
+  
+  // Count how many words are common English words
+  let commonCount = 0;
+  for (const w of words) {
+    if (COMMON_WORDS.has(w)) commonCount++;
   }
-
-  return result;
+  
+  const ratio = commonCount / words.length;
+  // Real English text typically has >20% common words; font binary data has <5%
+  return ratio > 0.15;
 }
 
 async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string): Promise<string> {
@@ -51,6 +71,7 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
   }
 
   if (ext === ".pdf") {
+    // Attempt 1: Use pdf-parse library
     let rawResult = "";
     try {
       let pdfFunc: any = null;
@@ -64,20 +85,20 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
 
       if (typeof pdfFunc === "function") {
         const data = await pdfFunc(buffer);
-        if (data && data.text && data.text.trim()) {
+        if (data && data.text) {
           rawResult = data.text.trim();
         }
       }
     } catch (e: any) {
-      console.warn("PDF parse primary notice:", e?.message);
+      console.warn("PDF parse notice:", e?.message);
     }
 
-    const cleanedPrimary = cleanPdfText(rawResult);
-    if (cleanedPrimary) {
-      return cleanedPrimary;
+    // Validate: is this real text or font binary garbage?
+    if (rawResult && isValidExtractedText(rawResult)) {
+      return rawResult;
     }
 
-    // Stream text & FlateDecode extraction fallback
+    // Attempt 2: Stream text extraction with FlateDecode decompression
     try {
       const zlib = require("zlib");
       const rawStr = buffer.toString("latin1");
@@ -94,7 +115,7 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
           try {
             decompressed = zlib.unzipSync(streamData);
           } catch {
-            // Keep raw stream
+            continue;
           }
         }
 
@@ -103,32 +124,27 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
         if (tjMatches) {
           for (const m of tjMatches) {
             const str = m.replace(/[()]/g, "");
-            if (str.trim().length > 1 && !str.includes("\\") && /[a-zA-Z]{2,}/.test(str)) {
+            if (str.trim().length > 1 && /[a-zA-Z]{2,}/.test(str)) {
               extracted += str + " ";
             }
           }
         }
       }
 
-      const cleanedStream = cleanPdfText(extracted);
-      if (cleanedStream) {
-        return cleanedStream;
+      if (extracted && isValidExtractedText(extracted)) {
+        return extracted.trim();
       }
     } catch (e: any) {
       console.warn("Stream extraction notice:", e?.message);
     }
 
-    // Ultimate fallback: extract readable words from buffer
-    const asciiText = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
-    const words = asciiText.match(/[A-Za-z]{2,}/g) || [];
-    const filteredText = words.filter(w => !w.startsWith("obj") && !w.startsWith("endobj") && !w.startsWith("stream")).join(" ");
-
-    const cleanedAscii = cleanPdfText(filteredText);
-    if (cleanedAscii) {
-      return cleanedAscii;
-    }
-
-    throw new Error("Could not extract readable text from PDF. Please verify the PDF contains selectable text.");
+    // All extraction methods failed to produce valid text
+    throw new Error(
+      "This PDF uses embedded fonts that prevent text extraction. " +
+      "Please save your document as a .txt or .docx file and upload again. " +
+      "Tip: Open the PDF, select all text (Ctrl+A), copy it (Ctrl+C), " +
+      "paste into Notepad, and save as .txt file."
+    );
   }
 
   throw new Error(`Unsupported file type: ${ext}. Supported formats: .pdf, .docx, .txt`);
