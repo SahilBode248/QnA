@@ -145,6 +145,33 @@ export default function Home() {
     }, 1700);
   };
 
+  // --- CLIENT-SIDE PDF TEXT EXTRACTION ---
+  const extractPdfTextClientSide = async (file: File): Promise<string> => {
+    const pdfjsLib = await import("pdfjs-dist");
+    
+    // Set worker source
+    if (typeof window !== "undefined") {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const textParts: string[] = [];
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .map((item: any) => item.str || "")
+        .join(" ");
+      if (pageText.trim()) {
+        textParts.push(pageText.trim());
+      }
+    }
+
+    return textParts.join("\n\n");
+  };
+
   // --- SUBMIT GENERATION ---
   const handleGenerate = async () => {
     if (!selectedFile && (!pastedText || !pastedText.trim())) {
@@ -159,8 +186,30 @@ export default function Home() {
 
     try {
       const formData = new FormData();
+      
       if (selectedFile) {
-        formData.append("file", selectedFile);
+        const ext = selectedFile.name.slice(selectedFile.name.lastIndexOf(".")).toLowerCase();
+        
+        if (ext === ".pdf") {
+          // Extract PDF text client-side (browser handles embedded fonts correctly)
+          setStatusMessage("Extracting text from PDF (client-side processing)...");
+          try {
+            const pdfText = await extractPdfTextClientSide(selectedFile);
+            if (!pdfText || pdfText.trim().length < 30) {
+              throw new Error("Could not extract text from this PDF. Please try .txt or .docx format.");
+            }
+            formData.append("text", pdfText);
+            formData.append("fileName", selectedFile.name);
+          } catch (pdfErr: any) {
+            throw new Error(
+              pdfErr.message || 
+              "Failed to extract text from PDF. Please save your document as .txt or .docx and try again."
+            );
+          }
+        } else {
+          // Send .docx and .txt directly to server for parsing
+          formData.append("file", selectedFile);
+        }
       } else {
         formData.append("text", pastedText);
         formData.append("fileName", "Manual_Text_Input.txt");
