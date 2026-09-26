@@ -430,10 +430,52 @@ DOCUMENT CONTENT:
   };
 }
 
-// --- EXCEL GENERATOR (3 SUB-SHEETS: English, Hindi, Marathi) ---
 export function createExcelWorkbook(qnaData: MultilingualQnAData): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
 
+  // 1. COMBINED SHEET: Stack English -> Hindi -> Marathi with Section Headers & Spacing
+  const combinedRows: { Questions: string; Answers: string }[] = [];
+
+  // --- ENGLISH SECTION ---
+  combinedRows.push({ Questions: "=== ENGLISH QnA PAIRS ===", Answers: "" });
+  (qnaData.english || []).forEach((p, idx) => {
+    const qText = p.question.startsWith("Q") ? p.question : `Q${idx + 1}: ${p.question}`;
+    combinedRows.push({ Questions: qText, Answers: p.answer });
+  });
+
+  // Generous Spacing (2 blank rows)
+  combinedRows.push({ Questions: "", Answers: "" });
+  combinedRows.push({ Questions: "", Answers: "" });
+
+  // --- HINDI SECTION ---
+  combinedRows.push({ Questions: "=== HINDI TRANSLATION (हिंदी) ===", Answers: "" });
+  (qnaData.hindi || []).forEach((p, idx) => {
+    const qText = p.question.startsWith("Q") ? p.question : `Q${idx + 1}: ${p.question}`;
+    combinedRows.push({ Questions: qText, Answers: p.answer });
+  });
+
+  // Generous Spacing (2 blank rows)
+  combinedRows.push({ Questions: "", Answers: "" });
+  combinedRows.push({ Questions: "", Answers: "" });
+
+  // --- MARATHI SECTION ---
+  combinedRows.push({ Questions: "=== MARATHI TRANSLATION (मराठी) ===", Answers: "" });
+  (qnaData.marathi || []).forEach((p, idx) => {
+    const qText = p.question.startsWith("Q") ? p.question : `Q${idx + 1}: ${p.question}`;
+    combinedRows.push({ Questions: qText, Answers: p.answer });
+  });
+
+  const wsCombined = XLSX.utils.json_to_sheet(combinedRows, { header: ["Questions", "Answers"] });
+  const maxQCombined = Math.max(...combinedRows.map(r => (r.Questions || "").length), 10);
+  const maxACombined = Math.max(...combinedRows.map(r => (r.Answers || "").length), 10);
+  wsCombined["!cols"] = [
+    { wch: Math.min(Math.max(maxQCombined + 2, 25), 65) },
+    { wch: Math.min(Math.max(maxACombined + 2, 35), 90) }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, wsCombined, "All Languages");
+
+  // 2. INDIVIDUAL SUB-SHEETS
   const configs: { key: keyof MultilingualQnAData; sheetName: string }[] = [
     { key: "english", sheetName: "English" },
     { key: "hindi", sheetName: "Hindi" },

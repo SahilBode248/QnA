@@ -233,16 +233,54 @@ def generate_fallback_qna(document_text: str) -> dict:
 
 def save_to_excel(qna_data: dict, output_file: str = "Multilingual_QnA.xlsx"):
     """
-    Saves QnA pairs to an Excel workbook with 3 distinct subsheets:
-    - English
-    - Hindi
-    - Marathi
-    Each sheet follows the format:
-    Questions | Answers
+    Saves QnA pairs to an Excel workbook:
+    - First sheet ('All Languages') stacks English, Hindi, and Marathi QnA pairs sequentially.
+    - Additional subsheets ('English', 'Hindi', 'Marathi') store each language individually.
     """
+    combined_rows = []
+
+    # 1. English QnAs
+    combined_rows.append({"Questions": "=== ENGLISH QnA PAIRS ===", "Answers": ""})
+    for idx, item in enumerate(qna_data.get("english", []), 1):
+        q_text = item.get("question", "")
+        if not q_text.startswith("Q"):
+            q_text = f"Q{idx}: {q_text}"
+        combined_rows.append({"Questions": q_text, "Answers": item.get("answer", "")})
+
+    # Spacing (2 blank rows)
+    combined_rows.append({"Questions": "", "Answers": ""})
+    combined_rows.append({"Questions": "", "Answers": ""})
+
+    # 2. Hindi QnAs
+    combined_rows.append({"Questions": "=== HINDI TRANSLATION (हिंदी) ===", "Answers": ""})
+    for idx, item in enumerate(qna_data.get("hindi", []), 1):
+        q_text = item.get("question", "")
+        if not q_text.startswith("Q"):
+            q_text = f"Q{idx}: {q_text}"
+        combined_rows.append({"Questions": q_text, "Answers": item.get("answer", "")})
+
+    # Spacing (2 blank rows)
+    combined_rows.append({"Questions": "", "Answers": ""})
+    combined_rows.append({"Questions": "", "Answers": ""})
+
+    # 3. Marathi QnAs
+    combined_rows.append({"Questions": "=== MARATHI TRANSLATION (मराठी) ===", "Answers": ""})
+    for idx, item in enumerate(qna_data.get("marathi", []), 1):
+        q_text = item.get("question", "")
+        if not q_text.startswith("Q"):
+            q_text = f"Q{idx}: {q_text}"
+        combined_rows.append({"Questions": q_text, "Answers": item.get("answer", "")})
+
     if pd is not None:
-        # Using pandas with ExcelWriter
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+            # 1. All Languages stacked sheet
+            df_combined = pd.DataFrame(combined_rows)
+            df_combined.to_excel(writer, sheet_name="All Languages", index=False)
+            ws_c = writer.sheets["All Languages"]
+            ws_c.column_dimensions["A"].width = 55
+            ws_c.column_dimensions["B"].width = 75
+
+            # 2. Individual language subsheets
             for lang_key, sheet_name in [("english", "English"), ("hindi", "Hindi"), ("marathi", "Marathi")]:
                 pairs = qna_data.get(lang_key, [])
                 df = pd.DataFrame([
@@ -250,8 +288,6 @@ def save_to_excel(qna_data: dict, output_file: str = "Multilingual_QnA.xlsx"):
                     for item in pairs
                 ])
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-                
-                # Auto-fit column widths
                 worksheet = writer.sheets[sheet_name]
                 for col in worksheet.columns:
                     max_len = max(len(str(cell.value or "")) for cell in col)
@@ -261,6 +297,16 @@ def save_to_excel(qna_data: dict, output_file: str = "Multilingual_QnA.xlsx"):
     elif openpyxl is not None:
         wb = openpyxl.Workbook()
         wb.remove(wb.active)  # remove default sheet
+
+        # 1. All Languages sheet
+        ws_all = wb.create_sheet(title="All Languages")
+        ws_all.append(["Questions", "Answers"])
+        for r in combined_rows:
+            ws_all.append([r["Questions"], r["Answers"]])
+        ws_all.column_dimensions["A"].width = 55
+        ws_all.column_dimensions["B"].width = 75
+
+        # 2. Individual subsheets
         for lang_key, sheet_name in [("english", "English"), ("hindi", "Hindi"), ("marathi", "Marathi")]:
             ws = wb.create_sheet(title=sheet_name)
             ws.append(["Questions", "Answers"])
@@ -273,7 +319,7 @@ def save_to_excel(qna_data: dict, output_file: str = "Multilingual_QnA.xlsx"):
         raise ImportError("Either 'pandas' with 'openpyxl' or 'openpyxl' is required to write .xlsx files.")
 
     print(f"[Success] Excel file generated successfully: {output_file}")
-    print(f"Sheets created: English, Hindi, Marathi")
+    print(f"Sheets created: All Languages (English -> Hindi -> Marathi stacked), English, Hindi, Marathi")
 
 
 def main():
