@@ -8,6 +8,17 @@ import {
   MultilingualQnAData
 } from "@/lib/qnaEngine";
 
+function cleanPdfText(text: string): string {
+  if (!text) return "";
+  // Remove PDF font glyph codes like <0001>, <01580165>, and kerning offsets like -8, -5
+  return text
+    .replace(/<[0-9A-Fa-f]{2,}>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/-\d+\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string): Promise<string> {
   const ext = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
   const buffer = Buffer.isBuffer(fileBuffer) ? fileBuffer : Buffer.from(fileBuffer);
@@ -22,6 +33,7 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
   }
 
   if (ext === ".pdf") {
+    let rawResult = "";
     try {
       let pdfFunc: any = null;
       try {
@@ -35,11 +47,16 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
       if (typeof pdfFunc === "function") {
         const data = await pdfFunc(buffer);
         if (data && data.text && data.text.trim()) {
-          return data.text.trim();
+          rawResult = data.text.trim();
         }
       }
     } catch (e: any) {
       console.warn("PDF parse primary notice:", e?.message);
+    }
+
+    const cleanedPrimary = cleanPdfText(rawResult);
+    if (cleanedPrimary && cleanedPrimary.split(/\s+/).length > 10) {
+      return cleanedPrimary;
     }
 
     // Stream text & FlateDecode extraction fallback
@@ -64,17 +81,18 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
         }
 
         const textContent = decompressed.toString("latin1");
-        const tjMatches = textContent.match(/\(([^)]+)\)\s*Tj|\[([^\]]+)\]\s*TJ/g);
+        const tjMatches = textContent.match(/\(([^)]+)\)/g);
         if (tjMatches) {
           for (const m of tjMatches) {
-            const str = m.replace(/[()\[\]]/g, "").replace(/\s*T?J$/, "");
-            if (str.trim().length > 1) extracted += str + " ";
+            const str = m.replace(/[()]/g, "");
+            if (str.trim().length > 1 && !str.includes("\\")) extracted += str + " ";
           }
         }
       }
 
-      if (extracted.trim().length > 30) {
-        return extracted.trim();
+      const cleanedStream = cleanPdfText(extracted);
+      if (cleanedStream && cleanedStream.split(/\s+/).length > 10) {
+        return cleanedStream;
       }
     } catch (e: any) {
       console.warn("Stream extraction notice:", e?.message);
@@ -83,10 +101,11 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
     // Ultimate fallback: extract readable words from buffer
     const asciiText = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
     const words = asciiText.match(/[A-Za-z0-9,.'"?!-]{2,}/g) || [];
-    const filteredText = words.filter(w => !w.startsWith("/") && !w.startsWith("obj") && !w.startsWith("endobj")).join(" ");
+    const filteredText = words.filter(w => !w.startsWith("/") && !w.startsWith("obj") && !w.startsWith("endobj") && !w.startsWith("stream")).join(" ");
 
-    if (filteredText.length > 50) {
-      return filteredText;
+    const cleanedAscii = cleanPdfText(filteredText);
+    if (cleanedAscii.length > 30) {
+      return cleanedAscii;
     }
 
     throw new Error("Could not extract readable text from PDF. Please verify the PDF contains selectable text.");
