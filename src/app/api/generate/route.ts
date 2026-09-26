@@ -10,13 +10,31 @@ import {
 
 function cleanPdfText(text: string): string {
   if (!text) return "";
-  // Remove PDF font glyph codes like <0001>, <01580165>, and kerning offsets like -8, -5
-  return text
+  
+  // 1. Remove font table keywords, CID codes, and kerning offsets
+  let cleaned = text
     .replace(/<[0-9A-Fa-f]{2,}>/g, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/-\d+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\b(Adobe|UCS|glyf|glyfr|fpgm|hmtx|head|loca|maxp|CFF|cmap|FontDescriptor|ToUnicode|en-IN|FontName|BaseFont|CIDInit|ProcSet|Encoding)\b/gi, " ")
+    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+    .replace(/\s+/g, " ");
+
+  // 2. Filter words to keep only valid human-readable words (with letters)
+  const words = cleaned.split(/\s+/).filter(w => {
+    const letterCount = (w.match(/[a-zA-Z]/g) || []).length;
+    const symbolCount = w.length - letterCount;
+    return letterCount >= 2 && symbolCount <= 2 && !w.startsWith("/");
+  });
+
+  const result = words.join(" ").trim();
+  
+  // Must contain at least 12 real words to be valid text
+  if (words.length < 12) {
+    return "";
+  }
+
+  return result;
 }
 
 async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string): Promise<string> {
@@ -55,7 +73,7 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
     }
 
     const cleanedPrimary = cleanPdfText(rawResult);
-    if (cleanedPrimary && cleanedPrimary.split(/\s+/).length > 10) {
+    if (cleanedPrimary) {
       return cleanedPrimary;
     }
 
@@ -85,13 +103,15 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
         if (tjMatches) {
           for (const m of tjMatches) {
             const str = m.replace(/[()]/g, "");
-            if (str.trim().length > 1 && !str.includes("\\")) extracted += str + " ";
+            if (str.trim().length > 1 && !str.includes("\\") && /[a-zA-Z]{2,}/.test(str)) {
+              extracted += str + " ";
+            }
           }
         }
       }
 
       const cleanedStream = cleanPdfText(extracted);
-      if (cleanedStream && cleanedStream.split(/\s+/).length > 10) {
+      if (cleanedStream) {
         return cleanedStream;
       }
     } catch (e: any) {
@@ -100,11 +120,11 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
 
     // Ultimate fallback: extract readable words from buffer
     const asciiText = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
-    const words = asciiText.match(/[A-Za-z0-9,.'"?!-]{2,}/g) || [];
-    const filteredText = words.filter(w => !w.startsWith("/") && !w.startsWith("obj") && !w.startsWith("endobj") && !w.startsWith("stream")).join(" ");
+    const words = asciiText.match(/[A-Za-z]{2,}/g) || [];
+    const filteredText = words.filter(w => !w.startsWith("obj") && !w.startsWith("endobj") && !w.startsWith("stream")).join(" ");
 
     const cleanedAscii = cleanPdfText(filteredText);
-    if (cleanedAscii.length > 30) {
+    if (cleanedAscii) {
       return cleanedAscii;
     }
 
