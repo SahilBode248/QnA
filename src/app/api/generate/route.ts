@@ -38,13 +38,13 @@ const COMMON_WORDS = new Set([
 ]);
 
 function isValidExtractedText(text: string): boolean {
-  if (!text || text.trim().length < 50) return false;
+  if (!text || text.trim().length < 20) return false;
   
   // Strip non-ASCII and normalize
   const ascii = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
   const words = ascii.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
   
-  if (words.length < 15) return false;
+  if (words.length < 8) return false;
   
   // Count how many words are common English words
   let commonCount = 0;
@@ -53,8 +53,8 @@ function isValidExtractedText(text: string): boolean {
   }
   
   const ratio = commonCount / words.length;
-  // Real English text typically has >20% common words; font binary data has <5%
-  return ratio > 0.15;
+  // Font binary data has <1% common words; real documents have >5%
+  return ratio > 0.04 || commonCount >= 3;
 }
 
 async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string): Promise<string> {
@@ -165,6 +165,8 @@ export async function POST(req: NextRequest) {
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
+      const textFromForm = formData.get("text") as string | null;
+      const customFileName = formData.get("fileName") as string | null;
       const customKey = formData.get("apiKey") as string | null;
       const requestedSample = formData.get("sampleId") as string | null;
       const fmt = formData.get("format") as string | null;
@@ -178,11 +180,16 @@ export async function POST(req: NextRequest) {
       if (fmt === "excel") {
         returnExcel = true;
       }
+      if (customFileName && customFileName.trim()) {
+        fileName = customFileName.trim();
+      }
 
       if (file && file.size > 0) {
         fileName = file.name;
         const arrayBuffer = await file.arrayBuffer();
         extractedText = await parseDocument(Buffer.from(arrayBuffer), fileName);
+      } else if (textFromForm && textFromForm.trim()) {
+        extractedText = textFromForm.trim();
       }
     } else {
       const body = await req.json();
