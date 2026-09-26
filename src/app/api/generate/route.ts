@@ -23,26 +23,72 @@ async function parseDocument(fileBuffer: Buffer | ArrayBuffer, fileName: string)
 
   if (ext === ".pdf") {
     try {
-      const pdfModule = await import("pdf-parse");
-      if ((pdfModule as any).PDFParse) {
-        const parser = new (pdfModule as any).PDFParse({ data: buffer });
-        await parser.load();
-        const res = await parser.getText();
-        if (res && res.trim()) return res.trim();
-      } else if (typeof (pdfModule as any).default === "function") {
-        const data = await (pdfModule as any).default(buffer);
-        if (data && data.text && data.text.trim()) return data.text.trim();
+      let pdfFunc: any = null;
+      try {
+        const pdfModule = await import("pdf-parse");
+        pdfFunc = (pdfModule as any).default || pdfModule;
+      } catch {
+        const req = eval("require");
+        pdfFunc = req("pdf-parse");
+      }
+
+      if (typeof pdfFunc === "function") {
+        const data = await pdfFunc(buffer);
+        if (data && data.text && data.text.trim()) {
+          return data.text.trim();
+        }
       }
     } catch (e: any) {
-      console.warn("PDF parser notice:", e?.message);
+      console.warn("PDF parse primary notice:", e?.message);
     }
 
-    // Fallback stream text extraction
-    const raw = buffer.toString("latin1");
-    const matches = raw.match(/\(([^)]+)\)\s*Tj/g);
-    if (matches && matches.length > 5) {
-      return matches.map(m => m.replace(/[()]/g, "").replace(/\s*Tj$/, "")).join(" ");
+    // Stream text & FlateDecode extraction fallback
+    try {
+      const zlib = require("zlib");
+      const rawStr = buffer.toString("latin1");
+      const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+      let extracted = "";
+      let match: RegExpExecArray | null;
+
+      while ((match = streamRegex.exec(rawStr)) !== null) {
+        const streamData = Buffer.from(match[1], "latin1");
+        let decompressed: Buffer = streamData;
+        try {
+          decompressed = zlib.inflateSync(streamData);
+        } catch {
+          try {
+            decompressed = zlib.unzipSync(streamData);
+          } catch {
+            // Keep raw stream
+          }
+        }
+
+        const textContent = decompressed.toString("latin1");
+        const tjMatches = textContent.match(/\(([^)]+)\)\s*Tj|\[([^\]]+)\]\s*TJ/g);
+        if (tjMatches) {
+          for (const m of tjMatches) {
+            const str = m.replace(/[()\[\]]/g, "").replace(/\s*T?J$/, "");
+            if (str.trim().length > 1) extracted += str + " ";
+          }
+        }
+      }
+
+      if (extracted.trim().length > 30) {
+        return extracted.trim();
+      }
+    } catch (e: any) {
+      console.warn("Stream extraction notice:", e?.message);
     }
+
+    // Ultimate fallback: extract readable words from buffer
+    const asciiText = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
+    const words = asciiText.match(/[A-Za-z0-9,.'"?!-]{2,}/g) || [];
+    const filteredText = words.filter(w => !w.startsWith("/") && !w.startsWith("obj") && !w.startsWith("endobj")).join(" ");
+
+    if (filteredText.length > 50) {
+      return filteredText;
+    }
+
     throw new Error("Could not extract readable text from PDF. Please verify the PDF contains selectable text.");
   }
 
